@@ -1,3 +1,11 @@
+// import { createRequire } from 'module'
+// const require = createRequire(import.meta.url)
+
+// import path from 'path'
+// import { fileURLToPath } from 'url'
+// const __filename = fileURLToPath(import.meta.url)
+// const __dirname = path.dirname(__filename)
+
 const { REST, Routes } = require('discord.js')
 const { discordClientId, discordUserToken } = require('./config.json')
 const fs = require('node:fs')
@@ -41,6 +49,6 @@ const rest = new REST().setToken(discordUserToken)
 		console.log(`Successfully reloaded ${data.length} application (/) commands.`)
 	} catch (error) {
 		// And of course, make sure you catch and log any errors!
-		console.error(error)
+		console.error('Error: ' + error)
 	}
 })()

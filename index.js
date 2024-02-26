@@ -1,3 +1,11 @@
+// import { createRequire } from 'module'
+// const require = createRequire(import.meta.url)
+
+// import path from 'path'
+// import { fileURLToPath } from 'url'
+// const __filename = fileURLToPath(import.meta.url)
+// const __dirname = path.dirname(__filename)
+
 const fs = require('node:fs')
 const path = require('node:path')
 const moment = require('moment')
@@ -5,7 +13,17 @@ const Sequelize = require('sequelize')
 const { Client, Collection, Events, GatewayIntentBits, EmbedBuilder } = require('discord.js')
 const Discord = require('discord.js')
 const { discordUserToken } = require('./config.json')
-const { send } = require('express/lib/response')
+const { send } = require('express/lib/response');
+let ollama
+(async () => {
+	const { Ollama } = await import('ollama')
+	ollama = new Ollama({ host: 'http://localhost:11434' })
+})()
+
+const modelfile = `
+FROM mistral:7b
+SYSTEM "You are a conversation topic analysis and summary expert. Given a list of messages, you respond in a single short sentence what the topics of the conversation are. Your response is as short as possible.
+`
 
 const client = new Client({
 	intents: [
@@ -40,16 +58,35 @@ async function resolveTarget(id, client) {
 
 async function getChannelSpeed(channel, lookback) {
 	const messages = await channel.messages.fetch({ limit: lookback })
-	// console.log(`messages: ${messages.size}`)
+	
 	const firstMessageTime = messages.first().createdTimestamp
 	// console.log(`first message time: ${firstMessageTime}`)
 	const lastMessageTime = messages.last().createdTimestamp
 	// console.log(`last message time: ${lastMessageTime}`)
 	const timeDifference = moment.duration(moment(firstMessageTime).diff(moment(lastMessageTime)))
-	// console.log(`time difference: ${timeDifference.asMinutes()}`)
+	console.log(`time difference: ${timeDifference.asMinutes()}`)
 	const messagesPerMinute = lookback / timeDifference.asMinutes()
-	// console.log(`messages per minute: ${messagesPerMinute}`)
+	console.log(`messages per minute: ${messagesPerMinute}`)
 	return messagesPerMinute
+}
+
+async function getSummary(channel, lookback) {
+	const messages = await channel.messages.fetch({ limit: lookback })
+	
+	let plainTextMessages = 'Summarize these messages:\n'
+	let msgsToAI = []
+	messages.forEach(msg => {
+		msgsToAI.push({
+			role: msg.author.tag,
+			content: msg.content,
+		})
+	})
+	console.log(msgsToAI)
+	const response = await ollama.chat({
+		model: 'mistral:7b',
+		messages: msgsToAI.reverse()
+	})
+	return response.message.content
 }
 
 function resolveSettings(settings, msg) {
@@ -280,11 +317,12 @@ client.once(Events.ClientReady, c => {
 })
 
 async function sendNotificationIfCriteriaMet(msg, settings) {
-	const threshold = settings.threshold
+	const threshold = settings.threshold || 'n/a'
 	const lookback = settings.lookback
 	const channelSpeed = await getChannelSpeed(msg.channel, lookback)
 	if (channelSpeed < threshold) return
-
+	
+	const summary = await getSummary(msg.channel, lookback)
 	const cooldown = settings.cooldown
 	const dms = await msg.author.createDM()
 	const lastDm = await dms.messages.fetch({ limit: 1 })
@@ -319,6 +357,7 @@ async function sendNotificationIfCriteriaMet(msg, settings) {
 			{ name: 'Lookback', value: `${pluralize(lookback, 'message')}`, inline: true },
 			{ name: 'ACTIVE CHATTERS', value: '--------------------' },
 			...activeChattersFields,
+			{ name: 'Summary', value: summary ? summary : "Summary is currently unavailable." }
 		)
 		.setTimestamp()
 		.setColor(0xffcb4c)
@@ -332,11 +371,10 @@ client.on(Events.MessageCreate, async msg => {
 	// if the message cache doesn't exist for this channel, load it with the last 100 messages
 	if (messageCache[msg.channel.id] === undefined) {
 		const messages = await msg.channel.messages.fetch({ limit: 100 })
-		messageCache[msg.channel.id] = Object.values(messages)
+		messageCache[msg.channel.id] = messages
 	}
 	// remove the oldest message from the channel's cache and add the newest
-	console.log(messageCache[msg.channel.id])
-	if (!userIdsWithSettingsCache.includes(msg.author.id)) return
+	// if (!userIdsWithSettingsCache.includes(msg.author.id)) return
 	const userSettings = await UserSettings.findAll({ where: { userId: msg.author.id } })
 	const relevantSettings = resolveSettings(userSettings, msg)
 	const defaultLookback = relevantSettings?.global?.lookback || 10
